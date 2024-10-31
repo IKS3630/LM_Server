@@ -7,56 +7,6 @@
     <link rel="shortcut icon" type="image/x-icon" href="/logo.ico">
     <link rel="stylesheet" href="styles.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.2/marked.min.js"></script>
-    <style>
-        .server-config {
-            display: flex;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-        #serverUrl {
-            flex-grow: 1;
-            margin-right: 10px;
-        }
-        #connectionStatus {
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
-            background-color: grey;
-        }
-        #connectionStatus.connected {
-            background-color: green;
-        }
-        #connectionStatus.disconnected {
-            background-color: red;
-        }
-        /* Styles Markdown */
-        .markdown-content {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-            line-height: 1.6;
-        }
-        
-        .assistant-message pre {
-            background-color: #f6f8fa;
-            padding: 16px;
-            border-radius: 6px;
-            overflow-x: auto;
-            margin: 8px 0;
-        }
-        
-        .assistant-message code {
-            background-color: rgba(175, 184, 193, 0.2);
-            padding: 0.2em 0.4em;
-            border-radius: 6px;
-            font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
-            font-size: 85%;
-        }
-        
-        .assistant-message pre code {
-            background-color: transparent;
-            padding: 0;
-            font-size: 100%;
-        }
-    </style>
 </head>
 <body>
     <div class="sidebar">
@@ -72,6 +22,18 @@
         <div class="chat-container" id="chatHistory"></div>
         
         <div class="input-container">
+            <div class="file-upload-container">
+                <label class="file-upload-button">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                    Joindre un PDF
+                    <input type="file" id="fileInput" accept=".pdf">
+                </label>
+                <div id="filePreview"></div>
+            </div>
             <textarea id="chatInput" placeholder="Entrez votre message..." disabled></textarea>
             <div class="controls">
                 <button id="sendButton" class="send-button" disabled>Envoyer</button>
