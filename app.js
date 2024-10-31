@@ -52,19 +52,46 @@ function addFileMessage(fileName, fileData) {
     const messageDiv = document.createElement('div');
     messageDiv.className = 'message user-message file-message';
     
-    const fileLink = document.createElement('a');
-    fileLink.href = fileData;
-    fileLink.download = fileName;
-    fileLink.textContent = fileName;
-    fileLink.target = '_blank';
+    try {
+        // Créer un blob à partir des données
+        const byteCharacters = atob(fileData.split(',')[1]);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'application/pdf' });
+        
+        // Créer une URL pour le blob
+        const fileUrl = URL.createObjectURL(blob);
+        
+        const fileLink = document.createElement('a');
+        fileLink.href = fileUrl;
+        fileLink.download = fileName;
+        fileLink.textContent = fileName;
+        fileLink.target = '_blank';
 
-    const fileIcon = document.createElement('span');
-    fileIcon.innerHTML = '📎';
+        const fileIcon = document.createElement('span');
+        fileIcon.innerHTML = '📎';
+        
+        messageDiv.appendChild(fileIcon);
+        messageDiv.appendChild(fileLink);
+    } catch (error) {
+        console.error('Erreur lors de la création du message fichier:', error);
+        messageDiv.textContent = `Fichier joint: ${fileName}`;
+    }
     
-    messageDiv.appendChild(fileIcon);
-    messageDiv.appendChild(fileLink);
     chatHistory.appendChild(messageDiv);
     chatHistory.scrollTop = chatHistory.scrollHeight;
+}
+
+function readFileAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('Erreur de lecture du fichier'));
+        reader.readAsDataURL(file);
+    });
 }
 
 function loadFromLocalStorage() {
@@ -134,6 +161,9 @@ function renderConversations() {
     });
 }
 
+
+
+
 function startNewConversation() {
     currentConversationId = 'conv_' + Date.now();
     conversationHistory = [];
@@ -160,7 +190,7 @@ function loadConversation(convId) {
             if(msg.file) {
                 addFileMessage(msg.file.name, msg.file.data);
             }
-            if(msg.content && !msg.content.startsWith('[Fichier joint:')) {
+            if(msg.content && !msg.content.startsWith('[Document PDF')) {
                 addMessageToHistory(msg.content, msg.role);
             }
         });
@@ -183,11 +213,18 @@ function updateCurrentConversationTitle() {
 function saveCurrentConversation() {
     const conversation = conversations.find(c => c.id === currentConversationId);
     if (conversation) {
-        conversation.messages = conversationHistory;
+        // Sauvegarder une version des messages sans les données binaires des fichiers
+        conversation.messages = conversationHistory.map(msg => ({
+            role: msg.role,
+            content: msg.content,
+            // Si c'est un message avec fichier, ne garder que le nom du fichier
+            file: msg.file ? { name: msg.file.name } : undefined
+        }));
+
         if (!conversation.title && conversationHistory.length > 0) {
             const firstMessage = conversationHistory[0].content;
-            conversation.title = firstMessage.startsWith('[Fichier joint:') ? 
-                'Conversation avec fichier' : 
+            conversation.title = firstMessage.startsWith('[Document PDF') ? 
+                'Conversation avec PDF' : 
                 firstMessage.substring(0, 30) + '...';
         }
         saveToLocalStorage();
@@ -295,61 +332,45 @@ async function sendChatMessage() {
     disableInput();
     showTypingIndicator();
 
-    // Gérer le fichier s'il y en a un
-    if (currentFile) {
-        const reader = new FileReader();
-        reader.onload = async function(e) {
-            const fileData = e.target.result;
+    try {
+        // Si on a un fichier
+        if (currentFile) {
+            const fileData = await readFileAsDataURL(currentFile);
             addFileMessage(currentFile.name, fileData);
             
-            const fileMessage = {
+            // Au lieu d'envoyer le fichier complet à l'API, on envoie juste un message descriptif
+            const userMessage = {
                 role: "user",
-                content: `[Fichier joint: ${currentFile.name}]`,
-                file: {
-                    name: currentFile.name,
-                    data: fileData
-                }
+                content: message ? 
+                    `[Document PDF envoyé: ${currentFile.name}]\n\n${message}` : 
+                    `[Document PDF envoyé: ${currentFile.name}]`
             };
-            conversationHistory.push(fileMessage);
             
-            // Envoyer le message texte s'il y en a un
-            if (message) {
-                addMessageToHistory(message, 'user');
-                const userMessage = {
-                    role: "user",
-                    content: message
-                };
-                conversationHistory.push(userMessage);
-            }
+            conversationHistory.push(userMessage);
+            addMessageToHistory(userMessage.content, 'user');
+            
+            removeFile();
+        } else if (message) {
+            // Message texte uniquement
+            const userMessage = {
+                role: "user",
+                content: message
+            };
+            conversationHistory.push(userMessage);
+            addMessageToHistory(message, 'user');
+        }
 
-            // Envoyer la requête au serveur
-            await sendToServer();
+        // Préparer le payload sans les données de fichier
+        const payload = {
+            messages: conversationHistory.map(msg => ({
+                role: msg.role,
+                content: msg.content
+            })),
+            model: "local-model",
+            temperature: 0.7
         };
-        reader.readAsDataURL(currentFile);
-        removeFile();
-    } else if (message) {
-        // Envoyer uniquement le message texte
-        addMessageToHistory(message, 'user');
-        const userMessage = {
-            role: "user",
-            content: message
-        };
-        conversationHistory.push(userMessage);
-        await sendToServer();
-    }
 
-    document.getElementById('chatInput').value = '';
-    enableInput();
-}
-
-async function sendToServer() {
-    const payload = {
-        messages: conversationHistory,
-        model: "local-model",
-        temperature: 0.7
-    };
-
-    try {
+        // Envoyer au serveur
         const response = await fetch(`${serverUrl}/v1/chat/completions`, {
             method: 'POST',
             headers: {
@@ -357,8 +378,12 @@ async function sendToServer() {
             },
             body: JSON.stringify(payload)
         });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
         const data = await response.json();
-        removeTypingIndicator();
         const content = data.choices[0].message.content;
         
         const assistantMessage = {
@@ -370,10 +395,15 @@ async function sendToServer() {
         addMessageToHistory(content, 'assistant');
         saveCurrentConversation();
         updateConnectionStatus(true);
+
     } catch (error) {
-        removeTypingIndicator();
+        console.error('Erreur lors de l\'envoi :', error);
         addMessageToHistory(`Erreur: ${error.message}`, 'assistant');
         updateConnectionStatus(false);
+    } finally {
+        document.getElementById('chatInput').value = '';
+        enableInput();
+        removeTypingIndicator();
     }
 }
 
