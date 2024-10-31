@@ -5,6 +5,7 @@ let currentConversationId = null;
 let isGenerating = false;
 let serverUrl = 'http://10.30.3.188:1234';
 let isConnected = false;
+let currentFile = null;
 
 // Configuration de marked
 marked.setOptions({
@@ -18,11 +19,58 @@ marked.setOptions({
     }
 });
 
+// Fonctions de gestion des fichiers
+function handleFileUpload(event) {
+    const file = event.target.files[0];
+    if (file && file.type === 'application/pdf') {
+        currentFile = file;
+        showFilePreview(file);
+    } else {
+        alert('Veuillez sélectionner un fichier PDF valide.');
+        event.target.value = '';
+    }
+}
+
+function showFilePreview(file) {
+    const previewContainer = document.getElementById('filePreview');
+    previewContainer.innerHTML = `
+        <div class="file-preview">
+            <span>${file.name}</span>
+            <span class="remove-file" onclick="removeFile()">×</span>
+        </div>
+    `;
+}
+
+function removeFile() {
+    currentFile = null;
+    document.getElementById('fileInput').value = '';
+    document.getElementById('filePreview').innerHTML = '';
+}
+
+function addFileMessage(fileName, fileData) {
+    const chatHistory = document.getElementById('chatHistory');
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message user-message file-message';
+    
+    const fileLink = document.createElement('a');
+    fileLink.href = fileData;
+    fileLink.download = fileName;
+    fileLink.textContent = fileName;
+    fileLink.target = '_blank';
+
+    const fileIcon = document.createElement('span');
+    fileIcon.innerHTML = '📎';
+    
+    messageDiv.appendChild(fileIcon);
+    messageDiv.appendChild(fileLink);
+    chatHistory.appendChild(messageDiv);
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+}
+
 function loadFromLocalStorage() {
     const savedConversations = localStorage.getItem('conversations');
     if (savedConversations) {
         conversations = JSON.parse(savedConversations);
-        // Si des conversations existent, définir la dernière comme conversation courante
         if (conversations.length > 0) {
             currentConversationId = conversations[conversations.length - 1].id;
         }
@@ -109,7 +157,12 @@ function loadConversation(convId) {
         conversationHistory = conversation.messages;
         document.getElementById('chatHistory').innerHTML = '';
         conversation.messages.forEach(msg => {
-            addMessageToHistory(msg.content, msg.role);
+            if(msg.file) {
+                addFileMessage(msg.file.name, msg.file.data);
+            }
+            if(msg.content && !msg.content.startsWith('[Fichier joint:')) {
+                addMessageToHistory(msg.content, msg.role);
+            }
         });
         renderConversations();
         enableInput();
@@ -132,7 +185,10 @@ function saveCurrentConversation() {
     if (conversation) {
         conversation.messages = conversationHistory;
         if (!conversation.title && conversationHistory.length > 0) {
-            conversation.title = conversationHistory[0].content.substring(0, 30) + '...';
+            const firstMessage = conversationHistory[0].content;
+            conversation.title = firstMessage.startsWith('[Fichier joint:') ? 
+                'Conversation avec fichier' : 
+                firstMessage.substring(0, 30) + '...';
         }
         saveToLocalStorage();
         renderConversations();
@@ -163,7 +219,6 @@ function deleteConversation(convId) {
             saveToLocalStorage();
             if (convId === currentConversationId) {
                 if (conversations.length > 0) {
-                    // Charge la dernière conversation si elle existe
                     loadConversation(conversations[conversations.length - 1].id);
                 } else {
                     currentConversationId = null;
@@ -182,6 +237,7 @@ function disableInput() {
     document.getElementById('chatInput').disabled = true;
     document.getElementById('sendButton').disabled = true;
     document.getElementById('newConversationButton').disabled = true;
+    document.getElementById('fileInput').disabled = true;
 }
 
 function enableInput() {
@@ -189,6 +245,7 @@ function enableInput() {
     document.getElementById('chatInput').disabled = false;
     document.getElementById('sendButton').disabled = false;
     document.getElementById('newConversationButton').disabled = false;
+    document.getElementById('fileInput').disabled = false;
 }
 
 function addMessageToHistory(message, role) {
@@ -233,20 +290,59 @@ function removeTypingIndicator() {
 
 async function sendChatMessage() {
     const message = document.getElementById('chatInput').value.trim();
-    if (!message || isGenerating) return;
+    if ((!message && !currentFile) || isGenerating) return;
 
-    addMessageToHistory(message, 'user');
     disableInput();
     showTypingIndicator();
 
-    const userMessage = {
-        role: "user",
-        content: message
-    };
+    // Gérer le fichier s'il y en a un
+    if (currentFile) {
+        const reader = new FileReader();
+        reader.onload = async function(e) {
+            const fileData = e.target.result;
+            addFileMessage(currentFile.name, fileData);
+            
+            const fileMessage = {
+                role: "user",
+                content: `[Fichier joint: ${currentFile.name}]`,
+                file: {
+                    name: currentFile.name,
+                    data: fileData
+                }
+            };
+            conversationHistory.push(fileMessage);
+            
+            // Envoyer le message texte s'il y en a un
+            if (message) {
+                addMessageToHistory(message, 'user');
+                const userMessage = {
+                    role: "user",
+                    content: message
+                };
+                conversationHistory.push(userMessage);
+            }
 
-    conversationHistory.push(userMessage);
-    saveCurrentConversation();
+            // Envoyer la requête au serveur
+            await sendToServer();
+        };
+        reader.readAsDataURL(currentFile);
+        removeFile();
+    } else if (message) {
+        // Envoyer uniquement le message texte
+        addMessageToHistory(message, 'user');
+        const userMessage = {
+            role: "user",
+            content: message
+        };
+        conversationHistory.push(userMessage);
+        await sendToServer();
+    }
 
+    document.getElementById('chatInput').value = '';
+    enableInput();
+}
+
+async function sendToServer() {
     const payload = {
         messages: conversationHistory,
         model: "local-model",
@@ -279,9 +375,6 @@ async function sendChatMessage() {
         addMessageToHistory(`Erreur: ${error.message}`, 'assistant');
         updateConnectionStatus(false);
     }
-
-    document.getElementById('chatInput').value = '';
-    enableInput();
 }
 
 async function checkConnection() {
@@ -316,6 +409,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const sendButton = document.getElementById('sendButton');
     const newConversationButton = document.getElementById('newConversationButton');
     const serverUrlInput = document.getElementById('serverUrl');
+    const fileInput = document.getElementById('fileInput');
 
     chatInput.addEventListener('keydown', function(e) {
         if (e.key === 'Enter' && !e.shiftKey && !isGenerating) {
@@ -326,6 +420,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     sendButton.addEventListener('click', sendChatMessage);
     newConversationButton.addEventListener('click', startNewConversation);
+    fileInput.addEventListener('change', handleFileUpload);
     
     serverUrlInput.addEventListener('change', function() {
         serverUrl = this.value;
@@ -333,13 +428,10 @@ document.addEventListener('DOMContentLoaded', function() {
         checkConnection();
     });
 
-    // Nouvelle logique d'initialisation
     if (conversations.length > 0) {
-        // Charge la dernière conversation si elle existe
         const lastConversation = conversations[conversations.length - 1];
         loadConversation(lastConversation.id);
     } else {
-        // Crée une nouvelle conversation uniquement si aucune n'existe
         startNewConversation();
     }
 
